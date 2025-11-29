@@ -2,8 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { FeatureCard } from './components/FeatureCard';
 import { WorkflowEditor } from './components/WorkflowEditor';
-import { GeminiService } from './services/geminiService';
-import { AppState, AppFeature, GenerationConfig, AppModel } from './types';
+import { AiService } from './services/geminiService'; // Renamed import conceptual purpose
+import { AppState, AppFeature, GenerationConfig, AppModel, AiProvider } from './types';
 import { Sparkles, ArrowRight, Lightbulb, Box, FileText, RotateCcw, ChevronRight, Target, Layers } from 'lucide-react';
 import { LoadingOverlay } from './components/LoadingOverlay';
 
@@ -12,6 +12,7 @@ const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
     step: 'setup',
     apiKey: '',
+    provider: 'gemini',
     model: '',
     idea: '',
     features: [],
@@ -31,10 +32,10 @@ const App: React.FC = () => {
   const [customFeatureInput, setCustomFeatureInput] = useState('');
 
   // Memoize Service to avoid recreation
-  const geminiService = useMemo(() => {
+  const aiService = useMemo(() => {
     if (!state.apiKey) return null;
-    return new GeminiService(state.apiKey, state.model);
-  }, [state.apiKey, state.model]);
+    return new AiService(state.apiKey, state.model, state.provider);
+  }, [state.apiKey, state.model, state.provider]);
 
   // --- Helpers ---
 
@@ -56,16 +57,16 @@ const App: React.FC = () => {
 
   // --- Handlers ---
 
-  const handleApiSetup = (key: string, model: string) => {
-    setState(prev => ({ ...prev, apiKey: key, model: model, step: 'ideation' }));
+  const handleApiSetup = (key: string, model: string, provider: AiProvider) => {
+    setState(prev => ({ ...prev, apiKey: key, model: model, provider: provider, step: 'ideation' }));
   };
 
   const generateFeatures = async () => {
-    if (!geminiService || !state.idea.trim()) return;
+    if (!aiService || !state.idea.trim()) return;
     setIsLoading(true);
     setLoadingMessage('Brainstorming features...');
     try {
-      const features = await geminiService.generateFeatures(
+      const features = await aiService.generateFeatures(
         state.idea, 
         state.config.featureStyle,
         state.config.productScope
@@ -120,7 +121,7 @@ const App: React.FC = () => {
   };
 
   const generateInitialDiagram = async () => {
-    if (!geminiService) return;
+    if (!aiService) return;
     const selectedFeatures = state.features.filter(f => f.selected);
     if (selectedFeatures.length === 0) {
       alert("Please select at least one feature.");
@@ -130,7 +131,7 @@ const App: React.FC = () => {
     setIsLoading(true);
     setLoadingMessage('Architecting workflow diagram...');
     try {
-      const graph = await geminiService.generateWorkflow(
+      const graph = await aiService.generateWorkflow(
         state.idea, 
         selectedFeatures,
         state.config.workflowComplexity,
@@ -179,7 +180,7 @@ const App: React.FC = () => {
   };
 
   const handleFinalize = async (nodes: any[], edges: any[], summaryLength: GenerationConfig['summaryLength']) => {
-    if (!geminiService) return;
+    if (!aiService) return;
     setIsLoading(true);
     setLoadingMessage('Writing technical documentation...');
     
@@ -187,7 +188,7 @@ const App: React.FC = () => {
     updateConfig('summaryLength', summaryLength);
     
     try {
-      const desc = await geminiService.generateDescription(state.idea, nodes, edges, summaryLength);
+      const desc = await aiService.generateDescription(state.idea, nodes, edges, summaryLength);
       setGeneratedDescription(desc);
       setState(prev => ({ ...prev, step: 'summary' }));
     } catch (e) {
@@ -267,14 +268,27 @@ const App: React.FC = () => {
           {state.step !== 'setup' && (
              <div className="flex items-center gap-4 text-sm text-slate-500">
                 <div className="flex items-center gap-2">
-                   <span className="hidden sm:inline">Model:</span>
+                   <span className="hidden sm:inline font-semibold text-slate-400">
+                     {state.provider === 'gemini' ? 'Gemini' : 'OpenAI'}
+                   </span>
                    <select 
                       value={state.model} 
                       onChange={handleModelChange}
-                      className="bg-slate-100 border-none rounded text-xs font-mono text-indigo-700 py-1 px-2 cursor-pointer hover:bg-slate-200 transition-colors"
+                      className="bg-slate-100 border-none rounded text-xs font-mono text-indigo-700 py-1 px-2 cursor-pointer hover:bg-slate-200 transition-colors max-w-[150px] truncate"
                     >
-                      <option value={AppModel.GEMINI_FLASH}>Gemini Flash</option>
-                      <option value={AppModel.GEMINI_3_PRO}>Gemini 3.0 Pro</option>
+                      {/* We just show the current model as an option if it's custom, plus standard ones to switch back easily */}
+                      <option value={state.model}>{state.model}</option>
+                      {state.provider === 'gemini' ? (
+                         <>
+                           <option value={AppModel.GEMINI_FLASH}>Gemini Flash</option>
+                           <option value={AppModel.GEMINI_3_PRO}>Gemini 3 Pro</option>
+                         </>
+                      ) : (
+                         <>
+                           <option value={AppModel.GPT_4O}>GPT-4o</option>
+                           <option value={AppModel.GPT_35_TURBO}>GPT-3.5</option>
+                         </>
+                      )}
                    </select>
                 </div>
                 <button onClick={restart} className="flex items-center gap-1 hover:text-red-500 transition-colors">
@@ -450,7 +464,7 @@ const App: React.FC = () => {
         )}
 
         {/* Workflow Step */}
-        {state.step === 'workflow' && geminiService && (
+        {state.step === 'workflow' && aiService && (
           <div className="animate-in fade-in duration-500 h-full flex flex-col">
             <div className="mb-4">
                <h2 className="text-2xl font-bold">Interactive Workflow</h2>
@@ -461,7 +475,7 @@ const App: React.FC = () => {
                   key={`workflow-${state.graph.version}`}
                   initialNodes={state.graph.nodes}
                   initialEdges={state.graph.edges}
-                  geminiService={geminiService}
+                  geminiService={aiService}
                   onGraphUpdate={handleGraphUpdate}
                   onSave={handleFinalize}
                />

@@ -15,7 +15,7 @@ import ReactFlow, {
 import { WorkflowNode } from './CustomNodes';
 import { Wand2, Plus, Loader2, Save, Maximize2, Minimize2, Trash2, Edit2, ZoomIn } from 'lucide-react';
 import { WorkflowNodeData, NodeType, GenerationConfig } from '../types';
-import { GeminiService } from '../services/geminiService';
+import { AiService } from '../services/geminiService';
 import { LoadingOverlay } from './LoadingOverlay';
 
 const nodeTypes = {
@@ -28,7 +28,7 @@ const nodeTypes = {
 interface WorkflowEditorProps {
   initialNodes: any[];
   initialEdges: any[];
-  geminiService: GeminiService;
+  geminiService: AiService;
   onSave: (nodes: Node[], edges: Edge[], summaryLength: GenerationConfig['summaryLength']) => void;
   onGraphUpdate: (nodes: Node[], edges: Edge[]) => void;
 }

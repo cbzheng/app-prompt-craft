@@ -26,9 +26,12 @@ export interface GraphData {
   version: number;
 }
 
+export type AiProvider = 'gemini' | 'openai';
+
 export interface AppState {
   step: 'setup' | 'ideation' | 'features' | 'workflow' | 'summary';
   apiKey: string;
+  provider: AiProvider;
   model: string;
   idea: string;
   features: AppFeature[];
@@ -39,6 +42,8 @@ export interface AppState {
 export enum AppModel {
   GEMINI_FLASH = 'gemini-2.5-flash',
   GEMINI_3_PRO = 'gemini-3-pro-preview',
+  GPT_4O = 'gpt-4o',
+  GPT_35_TURBO = 'gpt-3.5-turbo',
 }
 
 export type NodeType = 'view' | 'logic' | 'database' | 'userAction';

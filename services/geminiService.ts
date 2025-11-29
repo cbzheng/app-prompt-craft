@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { AppFeature, AppModel, GenerationConfig } from "../types";
+import { AppFeature, GenerationConfig, AiProvider } from "../types";
 
-// Schema for Feature Generation
+// Schema for Feature Generation (Gemini)
 const featureSchema: Schema = {
   type: Type.ARRAY,
   items: {
@@ -14,7 +14,7 @@ const featureSchema: Schema = {
   },
 };
 
-// Schema for Workflow Generation
+// Schema for Workflow Generation (Gemini)
 const workflowSchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -50,22 +50,74 @@ const workflowSchema: Schema = {
   required: ["nodes", "edges"],
 };
 
-export class GeminiService {
+export class AiService {
   private ai: GoogleGenAI | null = null;
+  private apiKey: string;
   private modelName: string;
+  private provider: AiProvider;
 
-  constructor(apiKey: string, modelName: string) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(apiKey: string, modelName: string, provider: AiProvider) {
+    this.apiKey = apiKey;
     this.modelName = modelName;
+    this.provider = provider;
+    
+    if (this.provider === 'gemini') {
+      this.ai = new GoogleGenAI({ apiKey });
+    }
   }
+
+  // --- OpenAI Helper ---
+  private async callOpenAI(systemInstruction: string, prompt: string, requireJson: boolean = false): Promise<any> {
+    const messages = [
+      { role: "system", content: systemInstruction },
+      { role: "user", content: prompt }
+    ];
+
+    const body: any = {
+      model: this.modelName,
+      messages: messages,
+    };
+
+    if (requireJson) {
+      body.response_format = { type: "json_object" };
+    }
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`OpenAI API Error: ${err}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices[0].message.content;
+    
+    if (requireJson) {
+        try {
+            return JSON.parse(content);
+        } catch (e) {
+            console.error("Failed to parse OpenAI JSON", content);
+            throw new Error("Invalid JSON response from OpenAI");
+        }
+    }
+    return content;
+  }
+
+  // --- Public Methods ---
 
   async generateFeatures(
     idea: string, 
     style: GenerationConfig['featureStyle'],
     scope: GenerationConfig['productScope']
   ): Promise<Omit<AppFeature, 'selected' | 'id'>[]> {
-    if (!this.ai) throw new Error("AI not initialized");
-
+    
     let styleInstruction = "Focus on standard, essential features for this type of app.";
     if (style === 'creative') {
       styleInstruction = "Think outside the box. Suggest unique, innovative, and differentiating features that make this app stand out.";
@@ -78,26 +130,40 @@ export class GeminiService {
       scopeInstruction = "Design a complete, production-ready product. Include comprehensive features, including user settings, administration, edge-case handling, and advanced functionality.";
     }
 
-    const prompt = `Generate a list of feature cards for a web/mobile application based on this idea: "${idea}". 
+    const basePrompt = `Generate a list of feature cards for a web/mobile application based on this idea: "${idea}". 
     
     Style: ${styleInstruction}
     Scope: ${scopeInstruction}
 
-    Focus on interactive and functional features. Return a JSON array.`;
+    Focus on interactive and functional features.`;
 
-    const response = await this.ai.models.generateContent({
-      model: this.modelName,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: featureSchema,
-        systemInstruction: "You are an expert product manager.",
-      },
-    });
-
-    const text = response.text;
-    if (!text) return [];
-    return JSON.parse(text);
+    // GEMINI IMPLEMENTATION
+    if (this.provider === 'gemini') {
+        if (!this.ai) throw new Error("AI not initialized");
+        const response = await this.ai.models.generateContent({
+          model: this.modelName,
+          contents: basePrompt + " Return a JSON array.",
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: featureSchema,
+            systemInstruction: "You are an expert product manager.",
+          },
+        });
+        const text = response.text;
+        if (!text) return [];
+        return JSON.parse(text);
+    } 
+    
+    // OPENAI IMPLEMENTATION
+    else {
+        const prompt = basePrompt + `
+        Return a JSON object with a key "features" which is an array of objects.
+        Each object must have "title" and "description" fields.
+        Example: { "features": [{ "title": "Login", "description": "..." }] }
+        `;
+        const result = await this.callOpenAI("You are an expert product manager. Output valid JSON.", prompt, true);
+        return result.features || [];
+    }
   }
 
   async generateWorkflow(
@@ -106,8 +172,6 @@ export class GeminiService {
     complexity: GenerationConfig['workflowComplexity'], 
     type: GenerationConfig['workflowType']
   ) {
-    if (!this.ai) throw new Error("AI not initialized");
-
     const featureList = features.map(f => `${f.title}: ${f.description}`).join('\n');
     
     let complexityInstruction = "Create a clear, high-level workflow.";
@@ -131,28 +195,41 @@ export class GeminiService {
     Scope: ${typeInstruction}
 
     Return a JSON structure with 'nodes' and 'edges'. 
-    Nodes must have x,y coordinates spaced out logically (approx 250-300px gap).
+    Nodes must have x,y coordinates spaced out logically (approx 250-300px gap) to form a visual flow.
     Node types: 'view' (UI screens), 'logic' (functions/api calls), 'database' (storage), 'userAction' (clicks).
+    
+    Structure:
+    {
+      "nodes": [{ "id": "1", "type": "view", "label": "Home", "details": "...", "x": 0, "y": 0 }],
+      "edges": [{ "id": "e1", "source": "1", "target": "2", "label": "Click" }]
+    }
     `;
 
-    const response = await this.ai.models.generateContent({
-      model: this.modelName,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: workflowSchema,
-        systemInstruction: "You are a software architect specializing in React Flow diagrams.",
-      },
-    });
-
-    const text = response.text;
-    if (!text) throw new Error("No content generated");
-    return JSON.parse(text);
+    // GEMINI
+    if (this.provider === 'gemini') {
+        if (!this.ai) throw new Error("AI not initialized");
+        const response = await this.ai.models.generateContent({
+          model: this.modelName,
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: workflowSchema,
+            systemInstruction: "You are a software architect specializing in React Flow diagrams.",
+          },
+        });
+        const text = response.text;
+        if (!text) throw new Error("No content generated");
+        return JSON.parse(text);
+    }
+    
+    // OPENAI
+    else {
+        const result = await this.callOpenAI("You are a software architect specializing in React Flow diagrams. Output valid JSON.", prompt, true);
+        return result;
+    }
   }
 
   async extendWorkflow(currentNodes: any[], currentEdges: any[], request: string) {
-    if (!this.ai) throw new Error("AI not initialized");
-
     const context = JSON.stringify({ nodes: currentNodes, edges: currentEdges });
     
     const prompt = `
@@ -165,20 +242,31 @@ export class GeminiService {
     - Do NOT return the old nodes/edges, only the new ones.
     - Ensure new nodes have distinct IDs (e.g., prefix with 'new-').
     - Place new nodes at x,y coordinates that don't overlap heavily with existing ones.
+    
+    Return JSON format: { "nodes": [...], "edges": [...] }
     `;
 
-    const response = await this.ai.models.generateContent({
-      model: this.modelName,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: workflowSchema,
-      },
-    });
-
-    const text = response.text;
-    if (!text) throw new Error("No content generated");
-    return JSON.parse(text);
+    // GEMINI
+    if (this.provider === 'gemini') {
+        if (!this.ai) throw new Error("AI not initialized");
+        const response = await this.ai.models.generateContent({
+          model: this.modelName,
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: workflowSchema,
+          },
+        });
+        const text = response.text;
+        if (!text) throw new Error("No content generated");
+        return JSON.parse(text);
+    } 
+    
+    // OPENAI
+    else {
+        const result = await this.callOpenAI("You are a software architect. Output valid JSON.", prompt, true);
+        return result;
+    }
   }
 
   async generateDescription(
@@ -187,8 +275,6 @@ export class GeminiService {
     edges: any[], 
     length: GenerationConfig['summaryLength']
   ): Promise<string> {
-    if (!this.ai) throw new Error("AI not initialized");
-
     const workflowContext = JSON.stringify({ nodes: nodes.map((n:any) => ({ label: n.data.label, type: n.data.type, details: n.data.details })), edges: edges.length });
     
     let lengthInstruction = "Write a concise 1-paragraph summary abstract.";
@@ -207,11 +293,19 @@ export class GeminiService {
     2. Key interactions described in the diagram.
     `;
 
-    const response = await this.ai.models.generateContent({
-      model: this.modelName,
-      contents: prompt,
-    });
-
-    return response.text || "Could not generate description.";
+    // GEMINI
+    if (this.provider === 'gemini') {
+        if (!this.ai) throw new Error("AI not initialized");
+        const response = await this.ai.models.generateContent({
+          model: this.modelName,
+          contents: prompt,
+        });
+        return response.text || "Could not generate description.";
+    } 
+    
+    // OPENAI
+    else {
+        return await this.callOpenAI("You are a technical writer.", prompt, false);
+    }
   }
 }
