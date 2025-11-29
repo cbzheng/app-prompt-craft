@@ -1,0 +1,5 @@
+{
+  "name": "AppArchitect AI",
+  "description": "An AI-powered application ideation tool. Generate feature sets, interactive workflow diagrams, and technical descriptions using Gemini models.",
+  "requestFramePermissions": []
+}
